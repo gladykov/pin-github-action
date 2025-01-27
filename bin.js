@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import fs from "fs";
+import path from "path";
 import { program } from "commander";
 import debugLib from "debug";
 const debug = debugLib("pin-github-action");
 
 import run from "./index.js";
 
+const mainDebug = debug.extend("main-program");
 const packageDetails = JSON.parse(
   fs.readFileSync(new URL("./package.json", import.meta.url))
 );
@@ -17,7 +19,7 @@ const packageDetails = JSON.parse(
     program
       .name("pin-github-action")
       .version(packageDetails.version)
-      .usage("[options] [file ...]")
+      .usage("[options] [file||directory ...]")
       .option(
         "-a, --allow <actions>",
         "comma separated list of actions to allow e.g. mheap/debug-action. May be a glob e.g. mheap/*"
@@ -47,13 +49,37 @@ const packageDetails = JSON.parse(
     let allowEmpty = program.opts().allowEmpty;
     let comment = program.opts().comment;
 
-    for (const filename of program.args) {
-      if (!fs.existsSync(filename)) {
-        throw "No such file: " + filename;
+    for (const pathname of program.args) {
+      if (!fs.existsSync(pathname)) {
+        throw "No such file or directory: " + pathname;
       }
     }
 
-    for (const filename of program.args) {
+    let filesToProcess = [];
+
+    for (const pathname of program.args) {
+      if (fs.lstatSync(pathname).isFile()) {
+        filesToProcess.push(pathname);
+      } else {
+        const files = fs
+          .readdirSync(pathname)
+          .filter((f) => {
+            return f.includes(".yaml") || f.includes(".yml");
+          })
+          .map((f) => path.join(pathname, f));
+        filesToProcess = filesToProcess.concat(files);
+      }
+    }
+
+    // If user will pass both file and directory, make sure to clear duplicates
+    filesToProcess = [...new Set(filesToProcess)];
+
+    if (filesToProcess.length === 0) {
+      throw "Didn't find Y(A)ML files in provided paths: " + program.args;
+    }
+
+    for (const filename of filesToProcess) {
+      mainDebug("Processing " + filename);
       const input = fs.readFileSync(filename).toString();
       const output = await run(
         input,
@@ -63,7 +89,7 @@ const packageDetails = JSON.parse(
         debug,
         comment
       );
-      fs.writeFileSync(filename, output.workflow.toString());
+      fs.writeFileSync(filename, output.input);
     }
 
     // Once run on a schedule, have it return a list of changes, along with SHA links
